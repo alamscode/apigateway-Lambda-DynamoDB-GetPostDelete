@@ -1,0 +1,303 @@
+Resources:
+  DynamoDBTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: Id
+          AttributeType: S
+      KeySchema: #required
+        - AttributeName: Id
+          KeyType: HASH
+      TableName: Trainees
+      ProvisionedThroughput: 
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      Tags:
+        - Key: Name
+          Value: alam
+
+  LambdaFunctionPOST:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Code: #required
+        ZipFile: |
+                 import json
+                 import boto3
+                 dynamodb = boto3.resource('dynamodb')
+                 table = dynamodb.Table('Trainees')
+                 def lambda_handler(event, context):
+                     table.put_item(Item=event)
+                     return {
+                        'statusCode': 200,
+                        'body': str(resp)
+                     }
+
+
+      Description: Lamda Function to perform POST operations on data from DynamoDBTable
+      FunctionName: postTraineesData
+      Handler: index.lambda_handler #required
+      Role: !GetAtt LambdaRole.Arn
+      Runtime: python3.7 #required
+      Tags:
+        - Key: Name
+          Value: alam
+
+  LambdaFunctionDelete:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Code: #required
+        ZipFile: |
+                 import json
+                 import boto3
+
+                 dynamodb = boto3.resource('dynamodb')
+                 table = dynamodb.Table('Trainees')
+
+
+                 def lambda_handler(event, context):
+                   traineeId = event['Id']
+                   resp = table.delete_item(Key={
+                     "Id": traineeId
+                   })
+                   return str('Deleted Successfully')
+
+
+      Description: Lamda Function to delete data from DynamoDBTable
+      FunctionName: DeleteTraineesData
+      Handler: index.lambda_handler #required
+      Role: !GetAtt LambdaRole.Arn
+      Runtime: python3.7 #required
+      Tags:
+        - Key: Name
+          Value: alam
+
+
+  LambdaFunctionGet:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Code: #required
+        ZipFile: |
+                 import json
+                 import boto3
+
+                 dynamodb = boto3.resource('dynamodb')
+                 table = dynamodb.Table('Trainees')
+
+
+                 def lambda_handler(event, context):
+                   traineeId = event['Id']
+                   resp = table.get_item(Key={
+                     "Id": traineeId
+                   })
+                   return {
+                        'statusCode': 200,
+                        'body': str(event)
+                     }
+
+
+      Description: Lamda Function to get data from DynamoDBTable
+      FunctionName: GetTraineesData
+      Handler: index.lambda_handler #required
+      Role: !GetAtt LambdaRole.Arn
+      Runtime: python3.7 #required
+      Tags:
+        - Key: Name
+          Value: alam
+
+
+  
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: dynamodbAccessRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - dynamodb:*
+              Resource: "*"
+            - Effect: Allow
+              Action:
+              - logs:*
+              Resource: "*"
+
+
+
+  RestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: AlamsApi
+      Description: Api to invoke Lambda function thats connected to DynamoDB
+      FailOnWarnings: true
+
+
+  LambdaPermissionPOST:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: lambda:invokeFunction #required
+      FunctionName: !GetAtt LambdaFunctionPOST.Arn
+      Principal: apigateway.amazonaws.com #required
+      SourceArn: 
+        Fn::Join: 
+        - ""
+        - - 'arn:aws:execute-api:'
+          - !Ref AWS::Region
+          - ':'
+          - !Ref AWS::AccountId
+          - ':'
+          - !Ref RestApi
+          - '/*'
+
+
+  LambdaPermissionDelete:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: lambda:invokeFunction #required
+      FunctionName: !GetAtt LambdaFunctionDelete.Arn
+      Principal: apigateway.amazonaws.com #required
+      SourceArn: 
+        Fn::Join: 
+        - ""
+        - - 'arn:aws:execute-api:'
+          - !Ref AWS::Region
+          - ':'
+          - !Ref AWS::AccountId
+          - ':'
+          - !Ref RestApi
+          - '/*'
+
+
+  LambdaPermissionGet:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: lambda:invokeFunction #required
+      FunctionName: !GetAtt LambdaFunctionGet.Arn
+      Principal: apigateway.amazonaws.com #required
+      SourceArn: 
+        Fn::Join: 
+        - ""
+        - - 'arn:aws:execute-api:'
+          - !Ref AWS::Region
+          - ':'
+          - !Ref AWS::AccountId
+          - ':'
+          - !Ref RestApi
+          - '/*'
+
+
+
+  RestApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId:
+        Fn::GetAtt:
+        - RestApi
+        - RootResourceId
+      PathPart: trainees
+
+  RestApiMethod:
+    Type: "AWS::ApiGateway::Method"
+    DependsOn: LambdaPermissionPOST
+    Properties:
+      AuthorizationType: None
+      HttpMethod: POST #required
+      MethodResponses:
+        - StatusCode: 200
+      ResourceId: !Ref RestApiResource #required
+      RestApiId: !Ref RestApi #required
+      Integration:
+        Type: AWS
+        IntegrationHttpMethod: POST
+        IntegrationResponses:
+        - StatusCode: 200
+          ResponseTemplates:
+            application/json: "$input.json('$.body')"
+        Uri: 
+          Fn::Join:
+          - ''
+          - - 'arn:aws:apigateway:'
+            - Ref: AWS::Region
+            - ":lambda:path/2015-03-31/functions/"
+            - Fn::GetAtt:
+              - LambdaFunctionPOST
+              - Arn
+            - "/invocations"
+
+  RestApiMethodDelete:
+    Type: "AWS::ApiGateway::Method"
+    DependsOn: LambdaPermissionDelete
+    Properties:
+      AuthorizationType: None
+      HttpMethod: DELETE
+      Integration:
+        IntegrationHttpMethod: "POST"
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates: {"application/json": ""}        
+        RequestTemplates: 
+          application/json: "{\"Id\": \"$input.params('traineeId')\" }"
+        Uri:
+          Fn::Join:
+          - ''
+          - - 'arn:aws:apigateway:'
+            - Ref: AWS::Region
+            - ":lambda:path/2015-03-31/functions/"
+            - Fn::GetAtt:
+              - LambdaFunctionDelete
+              - Arn
+            - "/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:  { "application/json": "Empty" }
+      RequestParameters: 
+        method.request.querystring.traineeId: true      
+      ResourceId: !Ref RestApiResource #required
+      RestApiId: !Ref RestApi #required
+
+
+  RestApiMethodGet:
+    Type: "AWS::ApiGateway::Method"
+    DependsOn: LambdaPermissionDelete
+    Properties:
+      AuthorizationType: None
+      HttpMethod: GET
+      Integration:
+        IntegrationHttpMethod: "POST"
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates: {"application/json": ""}        
+        RequestTemplates: 
+          application/json: "{\"Id\": \"$input.params('traineeId')\" }"
+        Uri:
+          Fn::Join:
+          - ''
+          - - 'arn:aws:apigateway:'
+            - Ref: AWS::Region
+            - ":lambda:path/2015-03-31/functions/"
+            - Fn::GetAtt:
+              - LambdaFunctionGet
+              - Arn
+            - "/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:  { "application/json": "Empty" }
+      RequestParameters: 
+        method.request.querystring.traineeId: true      
+      ResourceId: !Ref RestApiResource #required
+      RestApiId: !Ref RestApi #required
+  
